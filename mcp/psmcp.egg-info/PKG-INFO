@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: psmcp
+Version: 0.85.1
+Summary: Adobe Photoshop automation using MCP
+Author-email: Mike Chambers <mikechambers@gmail.com>
+License-Expression: MIT
+Requires-Python: >=3.10
+Requires-Dist: fonttools
+Requires-Dist: python-socketio
+Requires-Dist: mcp[cli]
+Requires-Dist: requests
+Requires-Dist: websocket-client>=1.8.0
+Requires-Dist: pillow>=11.2.1
+Requires-Dist: numpy>=2.2.6
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: isort; extra == "dev"
+Requires-Dist: mypy; extra == "dev"

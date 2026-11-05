@@ -163,6 +163,191 @@ async function runTests() {
         console.log("  ✓ Clip successfully moved to new start time ticks in undoable transaction");
     }
 
-    console.log('Unit tests base suite passed.');
+    // -------------------------------------------------------------------------
+    // TEST 4: razor_at_time tool - validation & honest UXP fallback reporting
+    // -------------------------------------------------------------------------
+    console.log("\nTEST 4: razor_at_time tool");
+    {
+        const cutTimeTicks = (10n * TICKS_PER_SECOND).toString(); // 10 seconds into Main_Interview.mp4
+
+        // 4a. Mismatch refusal
+        console.log("  4a: Refusing razor when expected clip name mismatches");
+        await assert.rejects(
+            async () => {
+                await core.commandHandlers.razorAtTime({
+                    options: {
+                        sequenceId,
+                        timeTicks: cutTimeTicks,
+                        trackType: "VIDEO",
+                        trackIndex: 0,
+                        expectedClipName: "Non_Existent_Clip.mp4",
+                        expectedStartTicks: (5n * TICKS_PER_SECOND).toString(),
+                    }
+                });
+            },
+            /Refusing edit: Clip name mismatch/
+        );
+        console.log("  ✓ Refused mismatched clip name on razor");
+
+        console.log("  4b: Refusing razor when expected start time mismatches");
+        await assert.rejects(
+            async () => {
+                await core.commandHandlers.razorAtTime({
+                    options: {
+                        sequenceId,
+                        timeTicks: cutTimeTicks,
+                        trackType: "VIDEO",
+                        trackIndex: 0,
+                        expectedClipName: "Main_Interview.mp4",
+                        expectedStartTicks: (999n * TICKS_PER_SECOND).toString(),
+                    }
+                });
+            },
+            /Refusing edit: Clip start time mismatch/
+        );
+        console.log("  ✓ Refused mismatched start ticks on razor");
+
+        // 4c. Dry run validation
+        console.log("  4c: Dry run identifies target clip and reports CEP companion panel");
+        const dryRunCut = await core.commandHandlers.razorAtTime({
+            options: {
+                sequenceId,
+                timeTicks: cutTimeTicks,
+                trackType: "VIDEO",
+                trackIndex: 0,
+                expectedClipName: "Main_Interview.mp4",
+                expectedStartTicks: (5n * TICKS_PER_SECOND).toString(),
+                dryRun: true,
+            }
+        });
+        assert.strictEqual(dryRunCut.dryRun, true);
+        assert.strictEqual(dryRunCut.status, "VALIDATED");
+        assert.strictEqual(dryRunCut.targetClips[0].clipName, "Main_Interview.mp4");
+        assert.strictEqual(dryRunCut.cepPanel, "cep/com.mikechambers.pr");
+        console.log("  ✓ Dry run validated target clip and reported CEP companion panel");
+
+        // 4d. Honest reporting that official Premiere UXP DOM lacks native razor method
+        console.log("  4d: Verifying official UXP API fidelity (requires CEP companion panel for QE cut)");
+        await assert.rejects(
+            async () => {
+                await core.commandHandlers.razorAtTime({
+                    options: {
+                        sequenceId,
+                        timeTicks: cutTimeTicks,
+                        trackType: "VIDEO",
+                        trackIndex: 0,
+                        expectedClipName: "Main_Interview.mp4",
+                        expectedStartTicks: (5n * TICKS_PER_SECOND).toString(),
+                        dryRun: false,
+                    }
+                });
+            },
+            /razor_at_time requires the Premiere Pro CEP companion panel/
+        );
+        console.log("  ✓ Correctly rejected faking and instructed use of CEP panel for QE razor");
+    }
+
+    // -------------------------------------------------------------------------
+    // TEST 5: apply_edits tool - descending order & single atomic transaction
+    // -------------------------------------------------------------------------
+    console.log("\nTEST 5: apply_edits tool (latest-to-earliest ordering & atomic Ctrl+Z)");
+    {
+        const txBefore = project.transactions.length;
+
+        // Provide edits in scrambled chronological order:
+        // Edit A: 5s
+        // Edit B: 30s
+        // Edit C: 6s (on Track 1)
+        const editA = {
+            type: "set_clip_disabled",
+            sequenceId,
+            trackType: "VIDEO",
+            trackIndex: 0,
+            clipIndex: 1, // Main_Interview.mp4 (start: 5s = 1270080000000)
+            expectedClipName: "Main_Interview.mp4",
+            expectedStartTicks: (5n * TICKS_PER_SECOND).toString(),
+            disabled: true,
+        };
+
+        const editB = {
+            type: "set_clip_disabled",
+            sequenceId,
+            trackType: "VIDEO",
+            trackIndex: 0,
+            clipIndex: 3, // Outro_Credits.mp4 (start: 30s = 7620480000000)
+            expectedClipName: "Outro_Credits.mp4",
+            expectedStartTicks: (30n * TICKS_PER_SECOND).toString(),
+            disabled: true,
+        };
+
+        const editC = {
+            type: "set_clip_disabled",
+            sequenceId,
+            trackType: "VIDEO",
+            trackIndex: 1,
+            clipIndex: 0, // Lower_Third_Title.png (start: 6s = 1524096000000)
+            expectedClipName: "Lower_Third_Title.png",
+            expectedStartTicks: (6n * TICKS_PER_SECOND).toString(),
+            disabled: true,
+        };
+
+        // 5a. Dry run verifies latest-to-earliest sort order
+        console.log("  5a: Dry run verifies execution plan is sorted latest to earliest");
+        const dryRunBatch = await core.commandHandlers.applyEdits({
+            options: {
+                edits: [editA, editB, editC], // Order: 5s, 30s, 6s
+                dryRun: true,
+            }
+        });
+        assert.strictEqual(dryRunBatch.dryRun, true);
+        assert.strictEqual(dryRunBatch.status, "VALIDATED");
+        const plan = dryRunBatch.executionPlan;
+        assert.strictEqual(plan[0].clipName, "Outro_Credits.mp4", "First should be 30s");
+        assert.strictEqual(plan[1].clipName, "Lower_Third_Title.png", "Second should be 6s");
+        assert.strictEqual(plan[2].clipName, "Main_Interview.mp4", "Third should be 5s");
+        console.log("  ✓ Correctly sorted latest (30s) -> middle (6s) -> earliest (5s)");
+
+        // 5b. Refusal if ANY edit in batch fails validation
+        console.log("  5b: Refusing entire batch if one edit has mismatched clip name");
+        const badBatch = [
+            editA,
+            { ...editB, expectedClipName: "Wrong_Name.mp4" },
+            editC
+        ];
+        await assert.rejects(
+            async () => {
+                await core.commandHandlers.applyEdits({
+                    options: { edits: badBatch, dryRun: false }
+                });
+            },
+            /Refusing edit: Clip name mismatch/
+        );
+        assert.strictEqual(project.transactions.length, txBefore, "No transaction should be executed on refusal");
+        console.log("  ✓ Aborted entire batch before applying any changes");
+
+        // 5c. Actual batch execution - single atomic transaction for Ctrl+Z
+        console.log("  5c: Executing batch edits in a SINGLE atomic transaction");
+        const batchResult = await core.commandHandlers.applyEdits({
+            options: {
+                edits: [editA, editB, editC],
+                dryRun: false,
+            }
+        });
+        assert.strictEqual(batchResult.status, "SUCCESS");
+        assert.strictEqual(batchResult.appliedEditsCount, 3);
+        assert.strictEqual(project.transactions.length, txBefore + 1, "Exactly ONE transaction added for all edits (Ctrl+Z)");
+        
+        const compoundTx = project.transactions[project.transactions.length - 1];
+        assert.strictEqual(compoundTx.actions.length, 3, "Compound transaction must contain all 3 actions");
+        console.log("  ✓ All 3 edits committed in 1 single transaction (undoable with 1 Ctrl+Z)");
+    }
+
+    console.log("\n=================================================");
+    console.log("ALL UNIT TESTS PASSED SUCCESSFULLY! (100% Green)");
+    console.log("=================================================\n");
 }
-runTests();
+
+runTests().catch((err) => {
+    console.error("Test failed with error:", err);
+    process.exit(1);
+});

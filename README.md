@@ -368,3 +368,83 @@ To configure the Adobe Premiere Pro MCP server in Gemini CLI, add it under `"mcp
 }
 ```
 
+> **Note on MCP Version**: FastMCP was migrated in `mcp 2.x`. Pinning `'mcp[cli]<2'` or running within the provided virtual environment ensures full compatibility with `FastMCP`.
+
+### 2. Running the Socket Proxy & Extensions
+
+The proxy server routes messages between the MCP server, the Adobe UXP plugin, and the companion CEP panel:
+
+```bash
+cd adb-proxy-socket
+npm install
+node proxy.js
+```
+
+#### A. Premiere Pro UXP Plugin (`uxp/pr`)
+1. Open **Adobe UXP Developer Tool** (UDT).
+2. Click **Add Plugin** and select `/Users/gourav/Desktop/PP/uxp/pr/manifest.json`.
+3. Click **Load** into Adobe Premiere Pro.
+4. In the plugin UI in Premiere Pro, click **Connect** to connect to `http://localhost:3001`.
+
+#### B. Premiere Pro CEP Companion Panel (`cep/com.mikechambers.pr`)
+Because official Premiere Pro UXP does not support razor/split cuts and cannot run ExtendScript, live razor operations are performed via a companion CEP panel utilizing the **QE DOM** (`app.enableQE(); qe.project.getActiveSequence().getVideoTrackAt(i).razor(timecode)`).
+
+1. Symlink or copy `cep/com.mikechambers.pr` into your Adobe CEP extensions directory:
+   - **macOS**: `~/Library/Application Support/Adobe/CEP/extensions/com.mikechambers.pr`
+   - **Windows**: `%APPDATA%\Adobe\CEP\extensions\com.mikechambers.pr`
+2. Enable PlayerDebugMode (already configured on this machine):
+   ```bash
+   defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+   ```
+3. In Premiere Pro, go to **Window > Extensions > Premiere Pro MCP CEP Agent**.
+4. Click **Connect** (connects to `http://localhost:3001` as `premiere_cep`).
+5. When `razor_at_time` is called, the proxy automatically routes the cut request to this CEP panel.
+
+### 3. Extended Timeline Tools
+
+Four new tools have been added following the repository's native command pipeline (`pr-mcp.py` -> `proxy.js` -> `uxp/pr/commands` & `cep/com.mikechambers.pr`):
+
+1. **`move_clip(sequence_id, track_type, track_index, clip_index, new_start_ticks, expected_clip_name, expected_start_ticks, dry_run=False)`**
+   - Moves a track item to a new start time while preserving its duration.
+   - Calculates relative shift in ticks (`new_start_ticks - current_start_ticks`).
+   - Wrapped in `project.executeTransaction` for native undo (`Ctrl+Z` / `Cmd+Z`).
+
+2. **`get_markers(sequence_id)`**
+   - Retrieves all timeline markers associated with the sequence using Adobe's official `app.Markers.getMarkers(sequence)` API.
+   - Returns marker names, comments, start ticks, duration ticks, and types.
+
+3. **`razor_at_time(sequence_id, time_ticks, expected_clip_name, expected_start_ticks, track_type="VIDEO", track_index=None, dry_run=False)`**
+   - Cuts/splits clip(s) on the timeline at `time_ticks`.
+   - **QE DOM Execution via CEP**: `TrackItem.razor()` does **not** exist in standard Premiere ExtendScript, and UXP lacks split APIs. Programmatic slicing is executed exclusively through the QE DOM via `cep/com.mikechambers.pr` using `qeTrack.razor(timecodeString)` where timecode is formatted via `Time.getFormatted()`.
+   - Validates clip name and start time before cutting.
+
+4. **`apply_edits(edits, dry_run=False)`**
+   - Applies a batch of timeline edits.
+   - **Order Guarantee**: Edits are automatically sorted and applied from the **latest time to earliest time** (descending order). This prevents earlier timeline modifications from shifting the timestamps and indices of subsequent edits.
+   - **Atomic Undo**: All edits are bundled inside a single `project.executeTransaction` compound action, allowing the entire batch to be undone with a single `Ctrl+Z` / `Cmd+Z`.
+
+### 4. Safety Mechanisms: Mandatory Guards & `dry_run`
+
+- **Mandatory Clip Name & Start Time Guards**: All edit tools strictly require `expected_clip_name` and `expected_start_ticks`. If either argument is omitted, or if they do not match the current timeline state, the edit is immediately refused to prevent timeline desynchronization.
+- **`dry_run: true`**: When enabled, the tool validates the target clips and parameters against the live sequence and returns a structured execution plan without modifying the timeline or recording transactions.
+
+### 5. Automated Verification Test Suite
+
+The test suite validates mock UXP DOM execution, safety checks, transaction bundling, and end-to-end MCP protocol communication:
+
+```bash
+# Run unit tests on mock timeline
+node tests/test_all_tools.js
+
+# Run end-to-end integration test (requires proxy running)
+node tests/test_e2e_mcp.js
+```
+
+## License
+
+Project released under a [MIT License](LICENSE.md).
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](LICENSE.md)
+
+
+# premier-pro-mcp-

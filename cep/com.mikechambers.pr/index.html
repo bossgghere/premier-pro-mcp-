@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Premiere Pro MCP CEP Agent</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h3>Premiere Pro MCP Agent (CEP)</h3>
+        <p style="font-size:11px; color:#aaa; margin:0 0 8px 0;">QE DOM Razor Cut Automation Bridge</p>
+
+        <div class="status-group">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+        </div>
+
+        <button id="btnConnect">Connect</button>
+
+        <div class="divider"></div>
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="chkConnectOnLaunch" checked>
+            <label for="chkConnectOnLaunch">Connect automatically on launch</label>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="log-section">
+            <label>Message Log</label>
+            <textarea id="messageLog" readonly></textarea>
+        </div>
+    </div>
+
+    <!-- Load CEP CSInterface library -->
+    <script type="text/javascript" src="./lib/CSInterface.js"></script>
+
+    <!-- Load local Socket.IO library -->
+    <script type="text/javascript" src="./lib/socket.io.js"></script>
+
+    <!-- Fallback to CDN Socket.IO if local load failed -->
+    <script>
+        if (typeof io === "undefined") {
+            document.write('<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"><\/script>');
+        }
+    </script>
+
+    <!-- Load command handlers -->
+    <script src="commands.js"></script>
+
+    <!-- Main CEP logic -->
+    <script src="main.js"></script>
+</body>
+</html>
